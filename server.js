@@ -53,6 +53,7 @@ app.post("/webhook",
     res.json({ received: true })
 })
 
+// JSON normal depois
 app.use(express.json())
 
 // ENDPOINT PRO MOCHA
@@ -68,9 +69,6 @@ app.get("/user-plan/:email", async (req, res) => {
     plan: data?.plan || "FREE"
   })
 })
-
-app.listen(3000, () => console.log("Rodando"))
-
 
 // SIMULAR PAGAMENTO (TESTE)
 app.post("/fake-payment", async (req, res) => {
@@ -93,3 +91,8 @@ app.post("/fake-payment", async (req, res) => {
     message: "Plano PRO ativado (FAKE)"
   })
 })
+
+// PORTA DINÂMICA
+const PORT = process.env.PORT || 3000
+
+app.listen(PORT, () => console.log("Rodando na porta " + PORT))
