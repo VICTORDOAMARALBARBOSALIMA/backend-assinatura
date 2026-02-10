@@ -125,17 +125,19 @@ app.post("/create-checkout", async (req, res) => {
 })
 
 // Endpoint temporário para testar Stripe
-app.get('/stripe-test', async (req, res) => {
+app.get('/stripe-direct-test', async (req, res) => {
   try {
+    // Inicializa Stripe com a chave do ENV
     const stripe = require('stripe')(process.env.STRIPE_SECRET);
 
-    // Teste rápido: criar objeto simples sem afetar nada
-    const test = await stripe.balance.retrieve();
+    // Teste mínimo: busca informações da conta
+    const account = await stripe.accounts.retrieve();
 
     res.json({
       success: true,
       message: 'Conexão com Stripe OK!',
-      available_balance: test.available
+      account_id: account.id,
+      charges_enabled: account.charges_enabled
     });
   } catch (error) {
     res.status(500).json({
