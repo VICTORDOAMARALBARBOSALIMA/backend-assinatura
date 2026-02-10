@@ -92,11 +92,6 @@ app.post("/fake-payment", async (req, res) => {
   })
 })
 
-// PORTA DINÂMICA
-const PORT = process.env.PORT || 3000
-
-app.listen(PORT, () => console.log("Rodando na porta " + PORT))
-
 
 app.post("/create-checkout", async (req, res) => {
 
@@ -128,3 +123,12 @@ app.post("/create-checkout", async (req, res) => {
   }
 
 })
+
+
+
+// PORTA DINÂMICA
+const PORT = process.env.PORT || 3000
+
+app.listen(PORT, () => console.log("Rodando na porta " + PORT))
+
+
