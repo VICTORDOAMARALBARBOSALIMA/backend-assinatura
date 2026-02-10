@@ -96,3 +96,35 @@ app.post("/fake-payment", async (req, res) => {
 const PORT = process.env.PORT || 3000
 
 app.listen(PORT, () => console.log("Rodando na porta " + PORT))
+
+
+app.post("/create-checkout", async (req, res) => {
+
+  const { email } = req.body
+
+  try {
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      mode: "subscription",
+
+      customer_email: email,
+
+      line_items: [
+        {
+          price: "price_1SemiHDWVvZht1JPyYVvNjMB",
+          quantity: 1
+        }
+      ],
+
+      success_url: "https://seuapp.com/sucesso",
+      cancel_url: "https://seuapp.com/cancelado"
+    })
+
+    res.json({ url: session.url })
+
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+
+})
