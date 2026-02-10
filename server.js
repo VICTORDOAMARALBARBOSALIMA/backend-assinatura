@@ -124,6 +124,26 @@ app.post("/create-checkout", async (req, res) => {
 
 })
 
+// Endpoint temporário para testar Stripe
+app.get('/stripe-test', async (req, res) => {
+  try {
+    const stripe = require('stripe')(process.env.STRIPE_SECRET);
+
+    // Teste rápido: criar objeto simples sem afetar nada
+    const test = await stripe.balance.retrieve();
+
+    res.json({
+      success: true,
+      message: 'Conexão com Stripe OK!',
+      available_balance: test.available
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 
 
 // PORTA DINÂMICA
