@@ -202,24 +202,41 @@ app.use(express.json());
 // ===============================
 app.post("/create-checkout", async (req, res) => {
   try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: "Email obrigatório" });
+    const { email, plan } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "Email obrigatório" });
+    }
+
+    // 🔹 Escolher Price ID correto
+    let priceId = process.env.STRIPE_PRICE_ID_MENSAL; // default mensal
+    if (plan === "anual") {
+      priceId = process.env.STRIPE_PRICE_ID_ANUAL;
+    }
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer_email: email,
       payment_method_types: ["card"],
-      line_items: [{ price: process.env.STRIPE_PRICE_ID, quantity: 1 }],
-      success_url: "https://app.formulape.com/sucesso?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://app.formulape.com/cancelado",
+      line_items: [
+        {
+          price: priceId,
+          quantity: 1,
+        },
+      ],
+      success_url: "https://formulape2.mocha.app/assinatura?session_id={CHECKOUT_SESSION_ID}&status=success",
+      cancel_url: "https://formulape2.mocha.app/assinatura",
     });
 
     res.json({ url: session.url });
   } catch (error) {
     console.log("❌ Stripe checkout error:", error.message);
-    res.status(500).json({ error: "Erro ao criar checkout Stripe." });
+    res.status(500).json({
+      error: "Erro ao criar checkout Stripe. Verifique chave, price e rede.",
+    });
   }
 });
+
 
 // ===============================
 // STRIPE DIRECT TEST
