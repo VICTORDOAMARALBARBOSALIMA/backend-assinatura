@@ -33,6 +33,52 @@ app.use(cors());
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
+
+// ===============================
+// FUNÇÃO AUXILIAR IDÊNTICA / SEGURA
+// ===============================
+async function upsertIfChanged(table, email, plan, subscription_status, subscriptionId = null) {
+  try {
+    // Pega registro atual
+    const { data: currentData, error: selectError } = await supabase
+      .from(table)
+      .select("*")
+      .eq("email", email)
+      .single();
+
+    if (selectError && selectError.code !== "PGRST116") {
+      console.error(`❌ Erro ao selecionar ${table}:`, selectError);
+      return;
+    }
+
+    const needsUpdate =
+      !currentData ||
+      currentData.plan !== plan ||
+      currentData.subscription_status !== subscription_status ||
+      (subscriptionId && currentData.subscription_id !== subscriptionId);
+
+    if (needsUpdate) {
+      const upsertObj = { email, plan, subscription_status };
+      if (subscriptionId) upsertObj.subscription_id = subscriptionId;
+      if (table === "users") upsertObj.updated_at = new Date();
+
+      const { error: upsertError } = await supabase
+        .from(table)
+        .upsert(upsertObj, { onConflict: "email" });
+
+      if (upsertError) {
+        console.error(`❌ Erro ao upsert ${table}:`, upsertError);
+      } else {
+        console.log(`✅ ${table} atualizado: ${email} → ${plan}/${subscription_status}`);
+      }
+    } else {
+      console.log(`ℹ️ ${table} já atualizado: ${email} → ${plan}/${subscription_status}`);
+    }
+  } catch (err) {
+    console.error(`🔥 Erro na função upsertIfChanged (${table}):`, err);
+  }
+}
+
 // ===============================
 // WEBHOOK STRIPE
 // ===============================
@@ -61,17 +107,18 @@ app.post(
       if (event.type === "checkout.session.completed") {
         const session = event.data.object;
 
-        const email = session.customer_email;
+        let email = session.customer_email;
         const subscriptionId = session.subscription;
+
+        if (!email && session.customer) {
+          const customer = await stripe.customers.retrieve(session.customer);
+          email = customer.email;
+        }
 
         console.log("✅ Checkout concluído:", email);
 
-        await supabase.from("users").upsert({
-          email,
-          plan: "PRO",
-          subscription_id: subscriptionId,
-          subscription_status: "active",
-        });
+        await upsertIfChanged("users", email, "PRO", "active", subscriptionId);
+        await upsertIfChanged("active", email, "PRO", "active");
       }
 
       // ==============================
@@ -79,20 +126,21 @@ app.post(
       // ==============================
       if (event.type === "invoice.paid") {
         const invoice = event.data.object;
-
-        const customerId = invoice.customer;
         const subscriptionId = invoice.subscription;
 
-        console.log("💰 Renovação paga:", subscriptionId);
-
-        // Aqui você poderia buscar email via Stripe se quiser
-        await supabase
+        const { data: user } = await supabase
           .from("users")
-          .update({
-            subscription_status: "active",
-            plan: "PRO",
-          })
-          .eq("subscription_id", subscriptionId);
+          .select("email")
+          .eq("subscription_id", subscriptionId)
+          .single();
+
+        if (!user?.email) {
+          console.log("❌ Renovação: email não encontrado para subscription", subscriptionId);
+        } else {
+          console.log("💰 Renovação paga:", subscriptionId);
+          await upsertIfChanged("users", user.email, "PRO", "active", subscriptionId);
+          await upsertIfChanged("active", user.email, "PRO", "active");
+        }
       }
 
       // ==============================
@@ -102,14 +150,17 @@ app.post(
         const invoice = event.data.object;
         const subscriptionId = invoice.subscription;
 
-        console.log("⚠️ Pagamento falhou:", subscriptionId);
-
-        await supabase
+        const { data: user } = await supabase
           .from("users")
-          .update({
-            subscription_status: "past_due",
-          })
-          .eq("subscription_id", subscriptionId);
+          .select("email")
+          .eq("subscription_id", subscriptionId)
+          .single();
+
+        if (user?.email) {
+          console.log("⚠️ Pagamento falhou:", subscriptionId);
+          await upsertIfChanged("users", user.email, "PRO", "past_due", subscriptionId);
+          await upsertIfChanged("active", user.email, "PRO", "past_due");
+        }
       }
 
       // ==============================
@@ -119,15 +170,17 @@ app.post(
         const subscription = event.data.object;
         const subscriptionId = subscription.id;
 
-        console.log("🚨 Assinatura cancelada:", subscriptionId);
-
-        await supabase
+        const { data: user } = await supabase
           .from("users")
-          .update({
-            subscription_status: "canceled",
-            plan: "FREE",
-          })
-          .eq("subscription_id", subscriptionId);
+          .select("email")
+          .eq("subscription_id", subscriptionId)
+          .single();
+
+        if (user?.email) {
+          console.log("🚨 Assinatura cancelada:", subscriptionId);
+          await upsertIfChanged("users", user.email, "FREE", "canceled", subscriptionId);
+          await upsertIfChanged("active", user.email, "FREE", "canceled");
+        }
       }
 
       res.json({ received: true });
@@ -137,7 +190,6 @@ app.post(
     }
   }
 );
-
 
 // ===============================
 // AGORA SIM JSON NORMAL
@@ -165,8 +217,8 @@ app.post("/create-checkout", async (req, res) => {
           quantity: 1,
         },
       ],
-      success_url: "https://seuapp.com/sucesso",
-      cancel_url: "https://seuapp.com/cancelado",
+      success_url: "https://formulape2.mocha.app/assinatura?subscription=success",
+      cancel_url: "https://formulape2.mocha.app/assinatura",
     });
 
     res.json({ url: session.url });
@@ -208,14 +260,14 @@ app.get("/stripe-direct-test", async (req, res) => {
 app.get("/user-plan/:email", async (req, res) => {
   try {
     const { data } = await supabase
-      .from("users")
-      .select("plan, status")
+      .from("active")
+      .select("plan, subscription_status")
       .eq("email", req.params.email)
       .single();
 
     res.json({
       plan: data?.plan || "FREE",
-      status: data?.status || "inactive",
+      status: data?.subscription_status || "inactive",
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
