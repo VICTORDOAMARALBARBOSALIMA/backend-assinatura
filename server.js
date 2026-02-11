@@ -27,19 +27,17 @@ const supabase = createClient(
 // MIDDLEWARE NORMAL
 // ===============================
 app.use(cors());
-
-// IMPORTANTE: NÃO usar express.json() antes do webhook
-// Vamos usar depois
-app.get("/health", (req, res) => {
-  res.json({ status: "ok" });
-});
+app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 // ===============================
-// FUNÇÃO AUXILIAR IDÊNTICA / SEGURA
+// FUNÇÃO AUXILIAR UPSET COM DEBUG
 // ===============================
 async function upsertIfChanged(table, email, plan, subscription_status, subscriptionId = null) {
   try {
-    // Pega registro atual
+    console.log(`🔹 DEBUG upsertIfChanged tabela: ${table}`);
+    console.log({ email, plan, subscription_status, subscriptionId });
+
+    // Busca registro atual
     const { data: currentData, error: selectError } = await supabase
       .from(table)
       .select("*")
@@ -80,177 +78,159 @@ async function upsertIfChanged(table, email, plan, subscription_status, subscrip
 }
 
 // ===============================
-// WEBHOOK STRIPE
+// WEBHOOK STRIPE ULTRA DEBUG
 // ===============================
-app.post(
-  "/webhook",
-  bodyParser.raw({ type: "application/json" }),
-  async (req, res) => {
-    const sig = req.headers["stripe-signature"];
-    let event;
+app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
+  const sig = req.headers["stripe-signature"];
+  let event;
 
-    try {
-      event = stripe.webhooks.constructEvent(
-        req.body,
-        sig,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
-    } catch (err) {
-      console.log("❌ Webhook signature error:", err.message);
-      return res.sendStatus(400);
-    }
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.log("❌ Webhook signature error:", err.message);
+    return res.sendStatus(400);
+  }
 
-    try {
+  try {
+    let email;
+    let subscriptionId;
+
+    switch (event.type) {
       // ==============================
-      // ✅ PAGAMENTO INICIAL
-      // ==============================
-      if (event.type === "checkout.session.completed") {
+      case "checkout.session.completed":
         const session = event.data.object;
+        email = session.customer_email;
+        subscriptionId = session.subscription;
 
-        let email = session.customer_email;
-        const subscriptionId = session.subscription;
-
+        // Garantir pegar email mesmo se session.customer_email for null
         if (!email && session.customer) {
           const customer = await stripe.customers.retrieve(session.customer);
           email = customer.email;
         }
 
-        console.log("✅ Checkout concluído:", email);
+        console.log("✅ Checkout concluído:", email, "Subscription:", subscriptionId);
 
-        await upsertIfChanged("users", email, "PRO", "active", subscriptionId);
-        await upsertIfChanged("active", email, "PRO", "active");
-      }
-
-      // ==============================
-      // 🔁 RENOVAÇÃO (MENSAL / ANUAL)
-      // ==============================
-      if (event.type === "invoice.paid") {
-        const invoice = event.data.object;
-        const subscriptionId = invoice.subscription;
-
-        const { data: user } = await supabase
-          .from("users")
-          .select("email")
-          .eq("subscription_id", subscriptionId)
-          .single();
-
-        if (!user?.email) {
-          console.log("❌ Renovação: email não encontrado para subscription", subscriptionId);
+        if (email) {
+          await upsertIfChanged("users", email, "PRO", "active", subscriptionId);
+          await upsertIfChanged("active", email, "PRO", "active");
         } else {
-          console.log("💰 Renovação paga:", subscriptionId);
-          await upsertIfChanged("users", user.email, "PRO", "active", subscriptionId);
-          await upsertIfChanged("active", user.email, "PRO", "active");
+          console.log("❌ Checkout: email não encontrado");
         }
-      }
+        break;
 
       // ==============================
-      // ❌ PAGAMENTO FALHOU
-      // ==============================
-      if (event.type === "invoice.payment_failed") {
+      case "invoice.paid":
         const invoice = event.data.object;
-        const subscriptionId = invoice.subscription;
+        subscriptionId = invoice.subscription;
 
-        const { data: user } = await supabase
+        // Busca email pelo subscription_id
+        const { data: userPaid } = await supabase
           .from("users")
           .select("email")
           .eq("subscription_id", subscriptionId)
           .single();
 
-        if (user?.email) {
-          console.log("⚠️ Pagamento falhou:", subscriptionId);
-          await upsertIfChanged("users", user.email, "PRO", "past_due", subscriptionId);
-          await upsertIfChanged("active", user.email, "PRO", "past_due");
+        email = userPaid?.email;
+
+        if (email) {
+          console.log("💰 Renovação paga:", subscriptionId, "Email:", email);
+          await upsertIfChanged("users", email, "PRO", "active", subscriptionId);
+          await upsertIfChanged("active", email, "PRO", "active");
+        } else {
+          console.log("❌ Invoice paid: email não encontrado para subscription", subscriptionId);
         }
-      }
+        break;
 
       // ==============================
-      // 🚨 ASSINATURA CANCELADA
-      // ==============================
-      if (event.type === "customer.subscription.deleted") {
-        const subscription = event.data.object;
-        const subscriptionId = subscription.id;
+      case "invoice.payment_failed":
+        const invoiceFailed = event.data.object;
+        subscriptionId = invoiceFailed.subscription;
 
-        const { data: user } = await supabase
+        const { data: userFailed } = await supabase
           .from("users")
           .select("email")
           .eq("subscription_id", subscriptionId)
           .single();
 
-        if (user?.email) {
-          console.log("🚨 Assinatura cancelada:", subscriptionId);
-          await upsertIfChanged("users", user.email, "FREE", "canceled", subscriptionId);
-          await upsertIfChanged("active", user.email, "FREE", "canceled");
-        }
-      }
+        email = userFailed?.email;
 
-      res.json({ received: true });
-    } catch (error) {
-      console.log("🔥 Webhook processing error:", error);
-      res.sendStatus(500);
+        if (email) {
+          console.log("⚠️ Pagamento falhou:", subscriptionId, "Email:", email);
+          await upsertIfChanged("users", email, "PRO", "past_due", subscriptionId);
+          await upsertIfChanged("active", email, "PRO", "past_due");
+        }
+        break;
+
+      // ==============================
+      case "customer.subscription.deleted":
+        const subscriptionDeleted = event.data.object;
+        subscriptionId = subscriptionDeleted.id;
+
+        const { data: userDeleted } = await supabase
+          .from("users")
+          .select("email")
+          .eq("subscription_id", subscriptionId)
+          .single();
+
+        email = userDeleted?.email;
+
+        if (email) {
+          console.log("🚨 Assinatura cancelada:", subscriptionId, "Email:", email);
+          await upsertIfChanged("users", email, "FREE", "canceled", subscriptionId);
+          await upsertIfChanged("active", email, "FREE", "canceled");
+        }
+        break;
+
+      default:
+        console.log("ℹ️ Evento Stripe ignorado:", event.type);
     }
+
+    res.json({ received: true });
+  } catch (error) {
+    console.log("🔥 Webhook processing error:", error);
+    res.sendStatus(500);
   }
-);
+});
 
 // ===============================
-// AGORA SIM JSON NORMAL
+// JSON NORMAL
 // ===============================
 app.use(express.json());
 
 // ===============================
-// CRIAR CHECKOUT
+// CREATE CHECKOUT
 // ===============================
 app.post("/create-checkout", async (req, res) => {
   try {
     const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ error: "Email obrigatório" });
-    }
+    if (!email) return res.status(400).json({ error: "Email obrigatório" });
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer_email: email,
       payment_method_types: ["card"],
-      line_items: [
-        {
-          price: process.env.STRIPE_PRICE_ID,
-          quantity: 1,
-        },
-      ],
-      success_url: "https://formulape2.mocha.app/assinatura?subscription=success",
-      cancel_url: "https://formulape2.mocha.app/assinatura",
+      line_items: [{ price: process.env.STRIPE_PRICE_ID, quantity: 1 }],
+      success_url: "https://app.formulape.com/sucesso?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: "https://app.formulape.com/cancelado",
     });
 
     res.json({ url: session.url });
   } catch (error) {
     console.log("❌ Stripe checkout error:", error.message);
-
-    res.status(500).json({
-      error:
-        "Erro ao criar checkout Stripe. Verifique chave, price e rede.",
-    });
+    res.status(500).json({ error: "Erro ao criar checkout Stripe." });
   }
 });
 
 // ===============================
-// TESTE STRIPE DIRETO
+// STRIPE DIRECT TEST
 // ===============================
 app.get("/stripe-direct-test", async (req, res) => {
   try {
     const account = await stripe.accounts.retrieve();
-
-    res.json({
-      success: true,
-      account_id: account.id,
-      charges_enabled: account.charges_enabled,
-    });
+    res.json({ success: true, account_id: account.id, charges_enabled: account.charges_enabled });
   } catch (error) {
     console.log("❌ Stripe test error:", error.message);
-
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -265,10 +245,7 @@ app.get("/user-plan/:email", async (req, res) => {
       .eq("email", req.params.email)
       .single();
 
-    res.json({
-      plan: data?.plan || "FREE",
-      status: data?.subscription_status || "inactive",
-    });
+    res.json({ plan: data?.plan || "FREE", status: data?.subscription_status || "inactive" });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -278,7 +255,4 @@ app.get("/user-plan/:email", async (req, res) => {
 // PORTA
 // ===============================
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`🚀 Backend rodando porta ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Backend rodando porta ${PORT}`));
