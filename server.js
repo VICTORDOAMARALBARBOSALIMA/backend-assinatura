@@ -30,7 +30,9 @@ app.use(cors());
 
 // IMPORTANTE: NÃO usar express.json() antes do webhook
 // Vamos usar depois
-
+app.get("/health", (req, res) => {
+  res.json({ status: "ok" });
+});
 // ===============================
 // WEBHOOK STRIPE
 // ===============================
@@ -39,7 +41,6 @@ app.post(
   bodyParser.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
-
     let event;
 
     try {
@@ -50,53 +51,93 @@ app.post(
       );
     } catch (err) {
       console.log("❌ Webhook signature error:", err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+      return res.sendStatus(400);
     }
 
     try {
-      // ===============================
-      // PAGAMENTO CONCLUÍDO
-      // ===============================
+      // ==============================
+      // ✅ PAGAMENTO INICIAL
+      // ==============================
       if (event.type === "checkout.session.completed") {
         const session = event.data.object;
 
         const email = session.customer_email;
         const subscriptionId = session.subscription;
 
-        console.log("✅ Pagamento confirmado:", email);
+        console.log("✅ Checkout concluído:", email);
 
         await supabase.from("users").upsert({
-          email: email,
+          email,
           plan: "PRO",
-          stripe_subscription_id: subscriptionId,
-          status: "active",
+          subscription_id: subscriptionId,
+          subscription_status: "active",
         });
       }
 
-      // ===============================
-      // CANCELAMENTO ASSINATURA
-      // ===============================
-      if (event.type === "customer.subscription.deleted") {
-        const subscription = event.data.object;
+      // ==============================
+      // 🔁 RENOVAÇÃO (MENSAL / ANUAL)
+      // ==============================
+      if (event.type === "invoice.paid") {
+        const invoice = event.data.object;
 
-        console.log("⚠ Assinatura cancelada:", subscription.id);
+        const customerId = invoice.customer;
+        const subscriptionId = invoice.subscription;
+
+        console.log("💰 Renovação paga:", subscriptionId);
+
+        // Aqui você poderia buscar email via Stripe se quiser
+        await supabase
+          .from("users")
+          .update({
+            subscription_status: "active",
+            plan: "PRO",
+          })
+          .eq("subscription_id", subscriptionId);
+      }
+
+      // ==============================
+      // ❌ PAGAMENTO FALHOU
+      // ==============================
+      if (event.type === "invoice.payment_failed") {
+        const invoice = event.data.object;
+        const subscriptionId = invoice.subscription;
+
+        console.log("⚠️ Pagamento falhou:", subscriptionId);
 
         await supabase
           .from("users")
           .update({
-            plan: "FREE",
-            status: "canceled",
+            subscription_status: "past_due",
           })
-          .eq("stripe_subscription_id", subscription.id);
+          .eq("subscription_id", subscriptionId);
+      }
+
+      // ==============================
+      // 🚨 ASSINATURA CANCELADA
+      // ==============================
+      if (event.type === "customer.subscription.deleted") {
+        const subscription = event.data.object;
+        const subscriptionId = subscription.id;
+
+        console.log("🚨 Assinatura cancelada:", subscriptionId);
+
+        await supabase
+          .from("users")
+          .update({
+            subscription_status: "canceled",
+            plan: "FREE",
+          })
+          .eq("subscription_id", subscriptionId);
       }
 
       res.json({ received: true });
     } catch (error) {
-      console.log("❌ Webhook process error:", error);
+      console.log("🔥 Webhook processing error:", error);
       res.sendStatus(500);
     }
   }
 );
+
 
 // ===============================
 // AGORA SIM JSON NORMAL
