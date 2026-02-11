@@ -1,35 +1,45 @@
 require("dotenv").config();
 
 const express = require("express");
-const bodyParser = require("body-parser");
 const cors = require("cors");
 const Stripe = require("stripe");
+const bodyParser = require("body-parser");
 const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 
-// Inicializa Stripe com a chave do ENV
-const stripe = Stripe(process.env.STRIPE_SECRET);
+// ===============================
+// CONFIG STRIPE
+// ===============================
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2024-04-10",
+});
 
-// Inicializa Supabase com ENV
+// ===============================
+// CONFIG SUPABASE
+// ===============================
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
+// ===============================
+// MIDDLEWARE NORMAL
+// ===============================
 app.use(cors());
 
-// Middleware para JSON
-app.use(express.json());
+// IMPORTANTE: NÃO usar express.json() antes do webhook
+// Vamos usar depois
 
-// -------------------------------------------
+// ===============================
 // WEBHOOK STRIPE
-// -------------------------------------------
+// ===============================
 app.post(
   "/webhook",
   bodyParser.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
+
     let event;
 
     try {
@@ -39,77 +49,78 @@ app.post(
         process.env.STRIPE_WEBHOOK_SECRET
       );
     } catch (err) {
-      console.log("Webhook error:", err.message);
-      return res.sendStatus(400);
+      console.log("❌ Webhook signature error:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const email = session.customer_email;
+    try {
+      // ===============================
+      // PAGAMENTO CONCLUÍDO
+      // ===============================
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
 
-      await supabase.from("users").upsert({
-        email: email,
-        plan: "PRO",
-      });
+        const email = session.customer_email;
+        const subscriptionId = session.subscription;
+
+        console.log("✅ Pagamento confirmado:", email);
+
+        await supabase.from("users").upsert({
+          email: email,
+          plan: "PRO",
+          stripe_subscription_id: subscriptionId,
+          status: "active",
+        });
+      }
+
+      // ===============================
+      // CANCELAMENTO ASSINATURA
+      // ===============================
+      if (event.type === "customer.subscription.deleted") {
+        const subscription = event.data.object;
+
+        console.log("⚠ Assinatura cancelada:", subscription.id);
+
+        await supabase
+          .from("users")
+          .update({
+            plan: "FREE",
+            status: "canceled",
+          })
+          .eq("stripe_subscription_id", subscription.id);
+      }
+
+      res.json({ received: true });
+    } catch (error) {
+      console.log("❌ Webhook process error:", error);
+      res.sendStatus(500);
     }
-
-    res.json({ received: true });
   }
 );
 
-// -------------------------------------------
-// ENDPOINT: Obter plano do usuário
-// -------------------------------------------
-app.get("/user-plan/:email", async (req, res) => {
-  try {
-    const { data } = await supabase
-      .from("users")
-      .select("plan")
-      .eq("email", req.params.email)
-      .single();
+// ===============================
+// AGORA SIM JSON NORMAL
+// ===============================
+app.use(express.json());
 
-    res.json({ plan: data?.plan || "FREE" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// -------------------------------------------
-// ENDPOINT: Simular pagamento (teste)
-// -------------------------------------------
-app.post("/fake-payment", async (req, res) => {
-  const { email } = req.body;
-
-  if (!email) {
-    return res.status(400).json({ error: "Email obrigatório" });
-  }
-
-  await supabase.from("users").upsert({
-    email: email,
-    plan: "PRO",
-  });
-
-  res.json({ success: true, message: "Plano PRO ativado (FAKE)" });
-});
-
-// -------------------------------------------
-// ENDPOINT: Criar sessão Stripe Checkout
-// -------------------------------------------
+// ===============================
+// CRIAR CHECKOUT
+// ===============================
 app.post("/create-checkout", async (req, res) => {
-  const { email } = req.body;
-
-  if (!email) {
-    return res.status(400).json({ error: "Email obrigatório" });
-  }
-
   try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "Email obrigatório" });
+    }
+
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
       mode: "subscription",
       customer_email: email,
+      payment_method_types: ["card"],
       line_items: [
         {
-          price: "price_1SemiHDWVvZht1JPyYVvNjMB", // Certifique-se que existe no Stripe
+          price: process.env.STRIPE_PRICE_ID,
           quantity: 1,
         },
       ],
@@ -119,38 +130,62 @@ app.post("/create-checkout", async (req, res) => {
 
     res.json({ url: session.url });
   } catch (error) {
-    console.log("Stripe error:", error.message);
+    console.log("❌ Stripe checkout error:", error.message);
+
     res.status(500).json({
       error:
-        "Ocorreu um erro na nossa conexão com o Stripe. Verifique a chave e rede.",
+        "Erro ao criar checkout Stripe. Verifique chave, price e rede.",
     });
   }
 });
 
-// -------------------------------------------
-// ENDPOINT DE TESTE DIRETO DO STRIPE
-// -------------------------------------------
+// ===============================
+// TESTE STRIPE DIRETO
+// ===============================
 app.get("/stripe-direct-test", async (req, res) => {
   try {
     const account = await stripe.accounts.retrieve();
 
     res.json({
       success: true,
-      message: "Conexão com Stripe OK!",
       account_id: account.id,
       charges_enabled: account.charges_enabled,
     });
   } catch (error) {
+    console.log("❌ Stripe test error:", error.message);
+
     res.status(500).json({
       success: false,
-      error:
-        "Ocorreu um erro na nossa conexão com o Stripe. Verifique a chave e rede.",
+      error: error.message,
     });
   }
 });
 
-// -------------------------------------------
-// PORTA DINÂMICA
-// -------------------------------------------
+// ===============================
+// CONSULTAR PLANO USER
+// ===============================
+app.get("/user-plan/:email", async (req, res) => {
+  try {
+    const { data } = await supabase
+      .from("users")
+      .select("plan, status")
+      .eq("email", req.params.email)
+      .single();
+
+    res.json({
+      plan: data?.plan || "FREE",
+      status: data?.status || "inactive",
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ===============================
+// PORTA
+// ===============================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Backend rodando na porta ${PORT}`));
+
+app.listen(PORT, () => {
+  console.log(`🚀 Backend rodando porta ${PORT}`);
+});
