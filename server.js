@@ -4,6 +4,7 @@ const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
 const bodyParser = require("body-parser");
+const fetch = require("node-fetch"); // ✅ para Node <18
 
 const app = express();
 
@@ -58,9 +59,7 @@ app.post(
     const sig = req.headers["stripe-signature"];
     let event;
 
-    // ===============================
     // 1️⃣ VALIDAR ASSINATURA STRIPE
-    // ===============================
     try {
       event = stripe.webhooks.constructEvent(
         req.body,
@@ -72,14 +71,6 @@ app.post(
       return res.sendStatus(400);
     }
 
-    // ===============================
-    // 2️⃣ RESPONDER RAPIDAMENTE PARA STRIPE
-    // ===============================
-    res.json({ received: true });
-
-    // ===============================
-    // 3️⃣ PROCESSAR EVENTO ASYNC
-    // ===============================
     try {
       switch (event.type) {
         case "checkout.session.completed": {
@@ -91,7 +82,7 @@ app.post(
           console.log("✅ Checkout completo:", userId);
 
           if (userId) {
-            updateMochaSubscription(userId, plan, "active", subscriptionId);
+            await updateMochaSubscription(userId, plan, "active", subscriptionId);
           }
           break;
         }
@@ -99,16 +90,13 @@ app.post(
         case "invoice.paid": {
           const invoice = event.data.object;
           const subscriptionId = invoice.subscription;
-
-          const subscription = await stripe.subscriptions.retrieve(
-            subscriptionId
-          );
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
           const userId = subscription.metadata?.user_id;
 
           console.log("💰 Renovação paga:", subscriptionId);
 
           if (userId) {
-            updateMochaSubscription(userId, "pro", "active", subscriptionId);
+            await updateMochaSubscription(userId, "pro", "active", subscriptionId);
           }
           break;
         }
@@ -116,16 +104,13 @@ app.post(
         case "invoice.payment_failed": {
           const invoice = event.data.object;
           const subscriptionId = invoice.subscription;
-
-          const subscription = await stripe.subscriptions.retrieve(
-            subscriptionId
-          );
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
           const userId = subscription.metadata?.user_id;
 
           console.log("⚠️ Pagamento falhou:", subscriptionId);
 
           if (userId) {
-            updateMochaSubscription(userId, "pro", "past_due", subscriptionId);
+            await updateMochaSubscription(userId, "pro", "past_due", subscriptionId);
           }
           break;
         }
@@ -138,7 +123,7 @@ app.post(
           console.log("🚨 Assinatura cancelada:", subscriptionId);
 
           if (userId) {
-            updateMochaSubscription(userId, "free", "canceled", subscriptionId);
+            await updateMochaSubscription(userId, "free", "canceled", subscriptionId);
           }
           break;
         }
@@ -146,8 +131,11 @@ app.post(
         default:
           console.log("ℹ️ Evento ignorado:", event.type);
       }
+
+      res.json({ received: true });
     } catch (error) {
       console.log("🔥 Erro processando webhook:", error);
+      res.sendStatus(500);
     }
   }
 );
@@ -178,26 +166,20 @@ app.post("/create-checkout", async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer_email: email,
-
       line_items: [
         {
           price: priceId,
           quantity: 1,
         },
       ],
-
-     success_url: 
+      success_url:
         "https://formulape2.mocha.app/assinatura?status=success",
-
-     cancel_url: 
-        "https://formulape2.mocha.app/assinatura",
-
+      cancel_url: "https://formulape2.mocha.app/assinatura",
       metadata: {
         user_id: user_id,
         plan_type: plan || "pro",
         app: "FormulaPe",
       },
-
       subscription_data: {
         metadata: {
           user_id: user_id,
