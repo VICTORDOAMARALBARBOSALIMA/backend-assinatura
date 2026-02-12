@@ -187,10 +187,10 @@ app.post("/create-checkout", async (req, res) => {
       ],
 
      success_url: 
-        "https://app.formulape.com/sucesso?session_id={CHECKOUT_SESSION_ID}",
+        "https://formulape2.mocha.app/assinatura?status=success",
 
      cancel_url: 
-        "https://app.formulape.com/cancelado",
+        "https://formulape2.mocha.app/assinatura",
 
       metadata: {
         user_id: user_id,
