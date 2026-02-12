@@ -202,10 +202,10 @@ app.use(express.json());
 // ===============================
 app.post("/create-checkout", async (req, res) => {
   try {
-    const { email, plan } = req.body;
+    const { email, plan, user_id } = req.body; // ✅ agora recebendo user_id do frontend
 
-    if (!email) {
-      return res.status(400).json({ error: "Email obrigatório" });
+    if (!email || !user_id) {
+      return res.status(400).json({ error: "Email e user_id obrigatórios" });
     }
 
     // 🔹 Escolher Price ID correto
@@ -226,6 +226,17 @@ app.post("/create-checkout", async (req, res) => {
       ],
       success_url: "https://formulape2.mocha.app/assinatura?session_id={CHECKOUT_SESSION_ID}&status=success",
       cancel_url: "https://formulape2.mocha.app/assinatura",
+      metadata: {
+        user_id: user_id,  // ✅ metadata obrigatório para o webhook
+        plan_type: plan,
+        app: "FormulaPe",
+      },
+      subscription_data: {
+        metadata: {
+          user_id: user_id,
+          plan_type: plan,
+        },
+      },
     });
 
     res.json({ url: session.url });
