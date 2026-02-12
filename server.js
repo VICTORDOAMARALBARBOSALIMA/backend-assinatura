@@ -1,28 +1,35 @@
 require("dotenv").config();
-
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
 const bodyParser = require("body-parser");
-const axios = require("axios"); // ✅ substituindo fetch
+const axios = require("axios"); // Axios para chamadas externas
+const { createClient } = require("@supabase/supabase-js");
 
+// ===============================
+// CONFIGURAÇÕES
+// ===============================
 const app = express();
 
-// ===============================
-// STRIPE CONFIG
-// ===============================
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2024-04-10",
 });
 
+// Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
 // ===============================
-// MIDDLEWARE NORMAL
+// MIDDLEWARE
 // ===============================
 app.use(cors());
 app.get("/health", (req, res) => res.json({ status: "ok" }));
+app.use(express.json());
 
 // ===============================
-// MOCHA INTERNAL API CALL
+// FUNÇÃO: ATUALIZAR MOCHA
 // ===============================
 async function updateMochaSubscription(userId, plan, status, subscriptionId) {
   try {
@@ -51,7 +58,27 @@ async function updateMochaSubscription(userId, plan, status, subscriptionId) {
 }
 
 // ===============================
-// WEBHOOK STRIPE - PRODUÇÃO SAFE
+// FUNÇÃO: ATUALIZAR SUPABASE/D1
+// ===============================
+async function updateSupabase(userId, plan, status) {
+  try {
+    const { data, error } = await supabase
+      .from("users") // substitua pelo nome da sua tabela
+      .update({ plan, status })
+      .eq("id", userId);
+
+    if (error) {
+      console.error("❌ Erro atualizando Supabase:", error.message);
+    } else {
+      console.log("✅ Supabase atualizado:", data);
+    }
+  } catch (err) {
+    console.error("❌ Erro supabase catch:", err.message);
+  }
+}
+
+// ===============================
+// WEBHOOK STRIPE
 // ===============================
 app.post(
   "/webhook",
@@ -60,7 +87,7 @@ app.post(
     const sig = req.headers["stripe-signature"];
     let event;
 
-    // 1️⃣ VALIDAR ASSINATURA STRIPE
+    // 1️⃣ Validar assinatura Stripe
     try {
       event = stripe.webhooks.constructEvent(
         req.body,
@@ -72,6 +99,10 @@ app.post(
       return res.sendStatus(400);
     }
 
+    // Responder rápido para Stripe
+    res.json({ received: true });
+
+    // Processar evento async
     try {
       switch (event.type) {
         case "checkout.session.completed": {
@@ -83,7 +114,10 @@ app.post(
           console.log("✅ Checkout completo:", userId);
 
           if (userId) {
-            await updateMochaSubscription(userId, plan, "active", subscriptionId);
+            // Atualiza Supabase
+            updateSupabase(userId, plan, "active");
+            // Atualiza Mocha
+            updateMochaSubscription(userId, plan, "active", subscriptionId);
           }
           break;
         }
@@ -97,7 +131,8 @@ app.post(
           console.log("💰 Renovação paga:", subscriptionId);
 
           if (userId) {
-            await updateMochaSubscription(userId, "pro", "active", subscriptionId);
+            updateSupabase(userId, "pro", "active");
+            updateMochaSubscription(userId, "pro", "active", subscriptionId);
           }
           break;
         }
@@ -111,7 +146,8 @@ app.post(
           console.log("⚠️ Pagamento falhou:", subscriptionId);
 
           if (userId) {
-            await updateMochaSubscription(userId, "pro", "past_due", subscriptionId);
+            updateSupabase(userId, "pro", "past_due");
+            updateMochaSubscription(userId, "pro", "past_due", subscriptionId);
           }
           break;
         }
@@ -124,7 +160,8 @@ app.post(
           console.log("🚨 Assinatura cancelada:", subscriptionId);
 
           if (userId) {
-            await updateMochaSubscription(userId, "free", "canceled", subscriptionId);
+            updateSupabase(userId, "free", "canceled");
+            updateMochaSubscription(userId, "free", "canceled", subscriptionId);
           }
           break;
         }
@@ -132,19 +169,11 @@ app.post(
         default:
           console.log("ℹ️ Evento ignorado:", event.type);
       }
-
-      res.json({ received: true });
     } catch (error) {
       console.log("🔥 Erro processando webhook:", error);
-      res.sendStatus(500);
     }
   }
 );
-
-// ===============================
-// JSON NORMAL
-// ===============================
-app.use(express.json());
 
 // ===============================
 // CREATE CHECKOUT
@@ -154,9 +183,7 @@ app.post("/create-checkout", async (req, res) => {
     const { email, plan, user_id } = req.body;
 
     if (!email || !user_id) {
-      return res.status(400).json({
-        error: "Email e user_id obrigatórios",
-      });
+      return res.status(400).json({ error: "Email e user_id obrigatórios" });
     }
 
     let priceId = process.env.STRIPE_PRICE_ID_MENSAL;
@@ -167,26 +194,11 @@ app.post("/create-checkout", async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer_email: email,
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      success_url:
-        "https://formulape2.mocha.app/assinatura?status=success",
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: "https://formulape2.mocha.app/assinatura?status=success",
       cancel_url: "https://formulape2.mocha.app/assinatura",
-      metadata: {
-        user_id: user_id,
-        plan_type: plan || "pro",
-        app: "FormulaPe",
-      },
-      subscription_data: {
-        metadata: {
-          user_id: user_id,
-          plan_type: plan || "pro",
-        },
-      },
+      metadata: { user_id, plan_type: plan || "pro", app: "FormulaPe" },
+      subscription_data: { metadata: { user_id, plan_type: plan || "pro" } },
     });
 
     res.json({ url: session.url });
@@ -202,19 +214,14 @@ app.post("/create-checkout", async (req, res) => {
 app.get("/stripe-test", async (req, res) => {
   try {
     const account = await stripe.accounts.retrieve();
-    res.json({
-      ok: true,
-      account: account.id,
-    });
+    res.json({ ok: true, account: account.id });
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // ===============================
+// START SERVER
+// ===============================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log("🚀 Backend rodando porta " + PORT)
-);
+app.listen(PORT, () => console.log("🚀 Backend rodando porta " + PORT));
