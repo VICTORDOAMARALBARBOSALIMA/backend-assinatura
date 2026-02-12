@@ -4,7 +4,7 @@ const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
 const bodyParser = require("body-parser");
-const fetch = require("node-fetch"); // Node 18+ compatível
+const axios = require("axios"); // Substitui node-fetch
 const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
@@ -52,29 +52,26 @@ async function upsertUserLocal(email, plan, subscription_status, subscription_id
 }
 
 // ===============================
-// FUNÇÃO AUXILIAR - ATUALIZA BANCO DO MOCHA
+// FUNÇÃO AUXILIAR - ATUALIZA BANCO DO MOCHA COM AXIOS
 // ===============================
 async function updateMochaSubscription(user_id, plan, stripe_subscription_id, stripe_customer_id) {
   try {
-    const response = await fetch("https://formulape2.mocha.app/internal/update-subscription", {
-      method: "POST",
+    const response = await axios.post(process.env.MOCHA_INTERNAL_API_URL, {
+      user_id,
+      plan,
+      stripe_subscription_id,
+      stripe_customer_id
+    }, {
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.MOCHA_INTERNAL_API_KEY}`
-      },
-      body: JSON.stringify({
-        user_id,
-        plan,
-        stripe_subscription_id,
-        stripe_customer_id
-      })
+        "Authorization": `Bearer ${process.env.MOCHA_INTERNAL_API_KEY}`
+      }
     });
 
-    const result = await response.json();
-    if (!result.success) console.error("❌ Mocha não atualizou:", result);
-    else console.log("✅ Mocha atualizado com sucesso:", result);
+    if (!response.data.success) console.error("❌ Mocha não atualizou:", response.data);
+    else console.log("✅ Mocha atualizado com sucesso:", response.data);
   } catch (err) {
-    console.error("🔥 Erro ao atualizar Mocha:", err);
+    console.error("🔥 Erro ao atualizar Mocha:", err.response?.data || err.message);
   }
 }
 
@@ -98,6 +95,8 @@ app.post("/webhook/stripe", bodyParser.raw({ type: "application/json" }), async 
 
   // 3️⃣ Processar eventos async
   try {
+    // ==============================
+    // Checkout concluído
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
       const user_id = session.metadata.user_id;
