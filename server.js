@@ -97,26 +97,61 @@ app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, r
 
     switch (event.type) {
       // ==============================
-      case "checkout.session.completed":
-        const session = event.data.object;
-        email = session.customer_email;
-        subscriptionId = session.subscription;
+      case "checkout.session.completed": {
+  const session = event.data.object;
 
-        // Garantir pegar email mesmo se session.customer_email for null
-        if (!email && session.customer) {
-          const customer = await stripe.customers.retrieve(session.customer);
-          email = customer.email;
-        }
+  const userId = session.metadata?.user_id;
+  subscriptionId = session.subscription; // ✅ usa a variável global
 
-        console.log("✅ Checkout concluído:", email, "Subscription:", subscriptionId);
+  console.log("✅ Checkout concluído user:", userId);
+  console.log("✅ Subscription ID:", subscriptionId);
 
-        if (email) {
-          await upsertIfChanged("users", email, "PRO", "active", subscriptionId);
-          await upsertIfChanged("active", email, "PRO", "active");
-        } else {
-          console.log("❌ Checkout: email não encontrado");
-        }
-        break;
+  if (!userId) {
+    console.log("❌ user_id não encontrado no metadata");
+    break;
+  }
+
+  // ===============================
+  // 🔥 ATUALIZA PODOLIGIST PROFILES
+  // ===============================
+  const { error: profileError } = await supabase
+    .from("podologist_profiles")
+    .update({
+      subscription_plan: "pro",
+      stripe_subscription_id: subscriptionId
+    })
+    .eq("user_id", userId);
+
+  if (profileError) {
+    console.log("❌ Erro ao atualizar podologist_profiles:", profileError);
+  } else {
+    console.log("✅ podologist_profiles atualizado PRO:", userId);
+  }
+
+  // ===============================
+  // 🔥 SALVA NA TABELA USERS (CRÍTICO)
+  // ===============================
+  if (session.customer_email) {
+    const { error: userError } = await supabase
+      .from("users")
+      .upsert({
+        email: session.customer_email,
+        subscription_id: subscriptionId,
+        plan: "PRO",
+        subscription_status: "active",
+        updated_at: new Date()
+      }, { onConflict: "email" });
+
+    if (userError) {
+      console.log("❌ Erro ao salvar users:", userError);
+    } else {
+      console.log("✅ Users atualizado:", session.customer_email);
+    }
+  }
+
+  break;
+}
+
 
       // ==============================
       case "invoice.paid":
@@ -191,7 +226,6 @@ app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, r
     res.sendStatus(500);
   }
 });
-
 // ===============================
 // JSON NORMAL
 // ===============================
