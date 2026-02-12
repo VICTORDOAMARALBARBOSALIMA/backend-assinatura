@@ -4,7 +4,7 @@ const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
 const bodyParser = require("body-parser");
-const fetch = require("node-fetch"); // ✅ para Node <18
+const axios = require("axios"); // ✅ substituindo fetch
 
 const app = express();
 
@@ -28,22 +28,23 @@ async function updateMochaSubscription(userId, plan, status, subscriptionId) {
   try {
     console.log("📡 Chamando Mocha API...");
 
-    const response = await fetch(process.env.MOCHA_INTERNAL_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.MOCHA_INTERNAL_API_KEY}`,
-      },
-      body: JSON.stringify({
+    const response = await axios.post(
+      process.env.MOCHA_INTERNAL_API_URL,
+      {
         user_id: userId,
-        plan: plan,
-        status: status,
+        plan,
+        status,
         subscription_id: subscriptionId,
-      }),
-    });
+      },
+      {
+        headers: {
+          "Authorization": `Bearer ${process.env.MOCHA_INTERNAL_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
 
-    const text = await response.text();
-    console.log("✅ Mocha response:", text);
+    console.log("✅ Mocha response:", response.data);
   } catch (error) {
     console.error("❌ Erro chamando Mocha:", error.message);
   }
