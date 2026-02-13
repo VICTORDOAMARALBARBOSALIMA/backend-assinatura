@@ -78,7 +78,7 @@ async function updateMochaSubscription(user_id, plan, stripe_subscription_id, st
 // ===============================
 // WEBHOOK STRIPE
 // ===============================
-app.post("/webhook/stripe", bodyParser.raw({ type: "application/json" }), async (req, res) => {
+app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
 
