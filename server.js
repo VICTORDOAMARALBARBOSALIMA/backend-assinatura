@@ -33,13 +33,15 @@ app.get("/health", (req, res) => res.json({ status: "ok" }));
 // ===============================
 // FUNÇÃO AUXILIAR - ATUALIZA SUPABASE LOCAL
 // ===============================
-async function upsertUserLocal(email, plan, subscription_status, subscription_id = null) {
+async function upsertUserLocal(user_id, created_at, subscription_plan, stripe_subscription_id, email, subscription_status = null) {
   try {
     const upsertObj = {
-      email,
-      plan,
+      user_id,
+      created_at,
+      subscription_plan,
       subscription_status,
-      subscription_id,
+      email,
+      stripe_subscription_id,
       updated_at: new Date()
     };
     const { error } = await supabase.from("podologist_profiles").upsert(upsertObj, { onConflict: "email" });
