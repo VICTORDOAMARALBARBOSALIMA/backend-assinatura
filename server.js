@@ -79,16 +79,15 @@ async function updateMochaSubscription(user_id, plan, stripe_subscription_id, st
 // WEBHOOK STRIPE
 // ===============================
 app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
-  const sig = req.headers["stripe-signature"];
-  let event;
+const sig = req.headers["stripe-signature"];
+let event;
 
-  // 1️⃣ Validar assinatura Stripe
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.error("❌ Webhook signature error:", err.message);
-    return res.sendStatus(400);
-  }
+try {
+  event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+} catch (err) {
+  console.error("❌ Webhook signature error:", err.message);
+  return res.sendStatus(400);
+}
 
   // 2️⃣ Responder rápido para Stripe
   res.json({ received: true });
