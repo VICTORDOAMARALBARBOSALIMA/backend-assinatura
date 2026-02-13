@@ -135,7 +135,7 @@ app.post("/create-checkout", async (req, res) => {
       customer_email: email,
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: "https://formulape2.mocha.app/assinatura?status=success",
+      success_url: 'https://formulape2.mocha.app/confirmacao-pagamento?session_id={CHECKOUT_SESSION_ID}',
       cancel_url: "https://formulape2.mocha.app/assinatura",
     
       metadata: {
