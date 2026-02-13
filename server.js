@@ -200,7 +200,7 @@ app.post("/create-checkout", async (req, res) => {
       cancel_url: "https://formulape2.mocha.app/assinatura",
     metadata: {
         user_id: req.body.user_id, // <-- ESSENCIAL para o webhook do Mocha funcionar
-        plan: "pro",
+        plan: "pro"
     }
     });
 
