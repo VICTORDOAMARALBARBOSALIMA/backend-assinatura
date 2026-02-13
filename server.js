@@ -42,7 +42,7 @@ async function upsertUserLocal(email, plan, subscription_status, subscription_id
       subscription_id,
       updated_at: new Date()
     };
-    const { error } = await supabase.from("users").upsert(upsertObj, { onConflict: "email" });
+    const { error } = await supabase.from("podologist_profiles").upsert(upsertObj, { onConflict: "email" });
     if (error) console.error("❌ Erro ao atualizar Supabase:", error);
     else console.log(`✅ Supabase atualizado: ${email} → ${plan}/${subscription_status}`);
   } catch (err) {
@@ -105,8 +105,8 @@ app.post(
       const stripe_subscription_id = session.subscription;
       const stripe_customer_id = session.customer;
 
-      await upsertUserLocal(email, "PRO", "active", stripe_subscription_id);
-      await updateMochaSubscription(user_id, "PRO", stripe_subscription_id, stripe_customer_id);
+      await upsertUserLocal(email, "pro", "active", stripe_subscription_id);
+      await updateMochaSubscription(user_id, "pro", stripe_subscription_id, stripe_customer_id);
 
       console.log("✅ Plano PRO atualizado no Supabase e Mocha:", email);
     }
@@ -133,9 +133,10 @@ app.post("/create-checkout", async (req, res) => {
       customer_email: email,
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `https://formulape2.mocha.app/assinatura?session_id={CHECKOUT_SESSION_ID}&status=success`,
+      success_url: "https://formulape2.mocha.app/assinatura?status=success",
       cancel_url: "https://formulape2.mocha.app/assinatura",
-    metadata: {
+    
+      metadata: {
         user_id: req.body.user_id, // <-- ESSENCIAL para o webhook do Mocha funcionar
         plan: "pro"
     }
