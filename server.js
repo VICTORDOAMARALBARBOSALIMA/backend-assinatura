@@ -28,7 +28,6 @@ const supabase = createClient(
 // MIDDLEWARE
 // ===============================
 app.use(cors());
-app.use(express.json());
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 // ===============================
@@ -80,6 +79,7 @@ async function updateMochaSubscription(user_id, plan, stripe_subscription_id, st
 // ===============================
 
 // Stripe webhook precisa do body como raw para validar assinatura
+// webhook precisa ser antes do express.json
 app.post(
   "/webhook",
   bodyParser.raw({ type: "application/json" }),
@@ -98,28 +98,25 @@ app.post(
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Vamos processar apenas o pagamento confirmado
     if (event.type === "checkout.session.completed") {
-  const session = event.data.object;
-  const email = session.customer_email;
-  const user_id = session.metadata.user_id;
-  const stripe_subscription_id = session.subscription;
-  const stripe_customer_id = session.customer;
+      const session = event.data.object;
+      const email = session.customer_email;
+      const user_id = session.metadata.user_id;
+      const stripe_subscription_id = session.subscription;
+      const stripe_customer_id = session.customer;
 
-  console.log("Pagamento confirmado para:", email);
+      await upsertUserLocal(email, "PRO", "active", stripe_subscription_id);
+      await updateMochaSubscription(user_id, "PRO", stripe_subscription_id, stripe_customer_id);
 
-  // Atualiza Supabase
-  await upsertUserLocal(email, "PRO", "active", stripe_subscription_id);
-
-  // Atualiza Mocha
-  await updateMochaSubscription(user_id, "PRO", stripe_subscription_id, stripe_customer_id);
-
-  console.log("✅ Plano PRO atualizado no Supabase e Mocha:", email);
-}
+      console.log("✅ Plano PRO atualizado no Supabase e Mocha:", email);
+    }
 
     res.status(200).send({ received: true });
   }
 );
+
+// depois de definir o webhook, você pode usar json normalmente
+app.use(express.json());
 
 // ===============================
 // CREATE CHECKOUT STRIPE
