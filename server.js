@@ -79,36 +79,47 @@ async function updateMochaSubscription(user_id, plan, stripe_subscription_id, st
 // WEBHOOK STRIPE
 // ===============================
 
-
-// ⚡ IMPORTANTE: webhook raw vem primeiro
-app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
+// Stripe webhook precisa do body como raw para validar assinatura
+app.post(
+  "/webhook",
+  bodyParser.raw({ type: "application/json" }),
+  async (req, res) => {
     const sig = req.headers["stripe-signature"];
     let event;
+
     try {
-        event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
     } catch (err) {
-        console.error("❌ Webhook signature error:", err.message);
-        return res.status(400).send(`Webhook Error: ${err.message}`);
+      console.log("Webhook signature failed:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
     }
+
+    // Vamos processar apenas o pagamento confirmado
+    if (event.type === "checkout.session.completed") {
+  const session = event.data.object;
+  const email = session.customer_email;
+  const user_id = session.metadata.user_id;
+  const stripe_subscription_id = session.subscription;
+  const stripe_customer_id = session.customer;
+
+  console.log("Pagamento confirmado para:", email);
+
+  // Atualiza Supabase
+  await upsertUserLocal(email, "PRO", "active", stripe_subscription_id);
+
+  // Atualiza Mocha
+  await updateMochaSubscription(user_id, "PRO", stripe_subscription_id, stripe_customer_id);
+
+  console.log("✅ Plano PRO atualizado no Supabase e Mocha:", email);
+}
 
     res.status(200).send({ received: true });
-
-    const session = event.data.object;
-    const userId = session.metadata.user_id;
-    const plan = session.metadata.plan || "pro";
-
-    console.log("✅ Checkout concluído:", userId, "Plano:", plan);
-
-    try {
-        await updateMochaSubscription(userId, plan, session.subscription, session.customer);
-    } catch (err) {
-        console.error("❌ Erro ao atualizar Mocha:", err);
-    }
-});
-
-// ⚡ Outros middlewares e rotas
-app.use(express.json()); // só depois do webhook
-app.use(express.urlencoded({ extended: true }));
+  }
+);
 
 // ===============================
 // CREATE CHECKOUT STRIPE
