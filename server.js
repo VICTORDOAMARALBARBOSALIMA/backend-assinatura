@@ -198,7 +198,9 @@ app.post("/create-checkout", async (req, res) => {
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `https://formulape2.mocha.app/assinatura?session_id={CHECKOUT_SESSION_ID}&status=success`,
       cancel_url: "https://formulape2.mocha.app/assinatura",
-      metadata: { user_id, plan_type: plan }
+    metadata: {
+        user_id: req.body.user_id  // <-- ESSENCIAL para o webhook do Mocha funcionar
+    }
     });
 
     res.json({ url: session.url });
