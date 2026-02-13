@@ -78,107 +78,52 @@ async function updateMochaSubscription(user_id, plan, stripe_subscription_id, st
 // ===============================
 // WEBHOOK STRIPE
 // ===============================
-app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
-const sig = req.headers["stripe-signature"];
-let event;
 
-try {
-  event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-} catch (err) {
-  console.error("❌ Webhook signature error:", err.message);
-  return res.sendStatus(400);
-}
 
-  // 2️⃣ Responder rápido para Stripe
-  res.json({ received: true });
+// ⚡ Webhook Stripe - versão mínima
+app.post(
+  "/webhook",
+  bodyParser.raw({ type: "application/json" }),
+  async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    let event;
 
-  // 3️⃣ Processar eventos async
-  try {
-    // ==============================
-    // Checkout concluído
+    try {
+      // valida assinatura
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err) {
+      console.error("❌ Webhook signature error:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // responder rápido para o Stripe
+    res.status(200).send({ received: true });
+
+    // =======================
+    // Processa apenas checkout completed
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
-      const user_id = session.metadata.user_id;
-      const email = session.customer_email;
-      const subscription_id = session.subscription;
-      const stripe_customer_id = session.customer;
+      const userId = session.metadata.user_id;
+      const plan = session.metadata.plan || "pro";
 
-      if (!user_id || !email) {
-        console.error("❌ user_id ou email não encontrados no metadata do Stripe");
-        return;
+      console.log("✅ Checkout concluído:", userId, "Plano:", plan);
+
+      // Atualiza o Mocha
+      try {
+        await updateMochaSubscription(userId, plan, session.subscription, session.customer);
+        console.log("✅ Plano atualizado no Mocha");
+      } catch (err) {
+        console.error("❌ Erro ao atualizar Mocha:", err);
       }
-
-      console.log("✅ Checkout concluído:", email, "user_id:", user_id);
-
-      // Atualiza Supabase local
-      await upsertUserLocal(email, "pro", "active", subscription_id);
-
-      // Atualiza Mocha oficial
-      await updateMochaSubscription(user_id, "pro", subscription_id, stripe_customer_id);
     }
-
-    // ==============================
-    // Renovação de fatura paga
-    if (event.type === "invoice.paid") {
-      const invoice = event.data.object;
-      const subscription_id = invoice.subscription;
-
-      const { data: user } = await supabase
-        .from("users")
-        .select("email")
-        .eq("subscription_id", subscription_id)
-        .single();
-
-      if (!user?.email) return console.error("❌ Email não encontrado para subscription", subscription_id);
-
-      console.log("💰 Renovação paga:", subscription_id);
-
-      await upsertUserLocal(user.email, "pro", "active", subscription_id);
-      // Não precisa chamar Mocha, já está PRO
-    }
-
-    // ==============================
-    // Pagamento falhou
-    if (event.type === "invoice.payment_failed") {
-      const invoice = event.data.object;
-      const subscription_id = invoice.subscription;
-
-      const { data: user } = await supabase
-        .from("users")
-        .select("email")
-        .eq("subscription_id", subscription_id)
-        .single();
-
-      if (!user?.email) return console.error("❌ Email não encontrado para subscription", subscription_id);
-
-      console.log("⚠️ Pagamento falhou:", subscription_id);
-
-      await upsertUserLocal(user.email, "pro", "past_due", subscription_id);
-    }
-
-    // ==============================
-    // Assinatura cancelada
-    if (event.type === "customer.subscription.deleted") {
-      const subscription = event.data.object;
-      const subscription_id = subscription.id;
-
-      const { data: user } = await supabase
-        .from("users")
-        .select("email")
-        .eq("subscription_id", subscription_id)
-        .single();
-
-      if (!user?.email) return console.error("❌ Email não encontrado para subscription", subscription_id);
-
-      console.log("🚨 Assinatura cancelada:", subscription_id);
-
-      await upsertUserLocal(user.email, "free", "canceled", subscription_id);
-    }
-
-  } catch (err) {
-    console.error("🔥 Erro processando webhook:", err);
   }
-});
+);
+
+
 
 // ===============================
 // CREATE CHECKOUT STRIPE
