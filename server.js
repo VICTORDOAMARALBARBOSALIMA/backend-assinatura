@@ -80,50 +80,35 @@ async function updateMochaSubscription(user_id, plan, stripe_subscription_id, st
 // ===============================
 
 
-// ⚡ Webhook Stripe - versão mínima
-app.post(
-  "/webhook",
-  bodyParser.raw({ type: "application/json" }),
-  async (req, res) => {
+// ⚡ IMPORTANTE: webhook raw vem primeiro
+app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
     const sig = req.headers["stripe-signature"];
     let event;
-
     try {
-      // valida assinatura
-      event = stripe.webhooks.constructEvent(
-        req.body,
-        sig,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
+        event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
     } catch (err) {
-      console.error("❌ Webhook signature error:", err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+        console.error("❌ Webhook signature error:", err.message);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // responder rápido para o Stripe
     res.status(200).send({ received: true });
 
-    // =======================
-    // Processa apenas checkout completed
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const userId = session.metadata.user_id;
-      const plan = session.metadata.plan || "pro";
+    const session = event.data.object;
+    const userId = session.metadata.user_id;
+    const plan = session.metadata.plan || "pro";
 
-      console.log("✅ Checkout concluído:", userId, "Plano:", plan);
+    console.log("✅ Checkout concluído:", userId, "Plano:", plan);
 
-      // Atualiza o Mocha
-      try {
+    try {
         await updateMochaSubscription(userId, plan, session.subscription, session.customer);
-        console.log("✅ Plano atualizado no Mocha");
-      } catch (err) {
+    } catch (err) {
         console.error("❌ Erro ao atualizar Mocha:", err);
-      }
     }
-  }
-);
+});
 
-
+// ⚡ Outros middlewares e rotas
+app.use(express.json()); // só depois do webhook
+app.use(express.urlencoded({ extended: true }));
 
 // ===============================
 // CREATE CHECKOUT STRIPE
