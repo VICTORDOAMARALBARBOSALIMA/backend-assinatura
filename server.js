@@ -33,8 +33,65 @@ app.get("/health", (req, res) => res.json({ status: "ok" }));
 // ===============================
 // FUNÇÃO AUXILIAR - ATUALIZA SUPABASE LOCAL
 // ===============================
-async function upsertUserLocal(user_id, created_at, subscription_plan, stripe_subscription_id, email, subscription_status = null) {
+// ===============================
+// FUNÇÃO AUXILIAR - CORRIGIDA
+// ===============================
+async function upsertUserLocal(user_id, subscription_plan, subscription_status, stripe_subscription_id, email) {
   try {
+    const upsertObj = {
+      user_id,
+      subscription_plan,
+      subscription_status,
+      email,
+      stripe_subscription_id,
+      updated_at: new Date()
+      // Removi created_at do upsert para não sobrescrever a data original de registro
+    };
+    
+    // Certifique-se que o nome da tabela no Supabase é exatamente esse
+    const { error } = await supabase.from("podologist_profiles").upsert(upsertObj, { onConflict: "email" });
+    
+    if (error) console.error("❌ Erro ao atualizar Supabase:", error);
+    else console.log(`✅ Supabase atualizado: ${email} → ${subscription_plan}/${subscription_status}`);
+  } catch (err) {
+    console.error("🔥 Erro upsertUserLocal:", err);
+  }
+}
+
+// ===============================
+// WEBHOOK STRIPE - CORRIGIDO
+// ===============================
+app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    } catch (err) {
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      
+      // Capturando os dados corretamente do objeto session
+      const email = session.customer_details.email; // Mais seguro que customer_email
+      const user_id = session.metadata.user_id;
+      const plan_type = session.metadata.plan_type || "pro"; // Pegando do metadata
+      const stripe_subscription_id = session.subscription;
+      const stripe_customer_id = session.customer;
+
+      // ORDEM CORRETA: user_id, plan, status, subscription_id, email
+      await upsertUserLocal(user_id, plan_type, "active", stripe_subscription_id, email);
+      
+      // Atualiza o sistema Mocha
+      await updateMochaSubscription(user_id, plan_type, stripe_subscription_id, stripe_customer_id);
+
+      console.log("✅ Pagamento processado com sucesso para:", email);
+    }
+
+    res.status(200).send({ received: true });
+});  try {
     const upsertObj = {
       user_id,
       created_at,
@@ -50,7 +107,7 @@ async function upsertUserLocal(user_id, created_at, subscription_plan, stripe_su
   } catch (err) {
     console.error("🔥 Erro upsertUserLocal:", err);
   }
-}
+
 
 // ===============================
 // FUNÇÃO AUXILIAR - ATUALIZA BANCO DO MOCHA COM AXIOS
